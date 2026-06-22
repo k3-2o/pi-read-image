@@ -1,6 +1,6 @@
 {
   "name": "@k3_2o/pi-read-image",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "OCR image-to-text tool for Pi \u2014 extracts text from screenshots, terminal output, and code images using Tesseract + ImageMagick",
   "keywords": [
     "pi-package",

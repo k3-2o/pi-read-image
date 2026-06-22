@@ -34,9 +34,9 @@ import { checkDependencies, runOCR, type OcrResult } from "./ocr";
 // --- Schema ---
 
 const ReadImageParams = Type.Object({
-  path: Type.Union([Type.String(), Type.Array(Type.String())], {
+  paths: Type.Array(Type.String(), {
     description:
-      "Path to the image file, or array of multiple image paths to batch OCR (png, jpg, webp, etc.)",
+      "One or more image file paths to OCR (png, jpg, webp, etc.). Pass multiple paths to batch OCR in one call.",
   }),
   language: Type.Optional(
     Type.String({
@@ -171,7 +171,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "read_image",
     label: "Read Image (OCR)",
-    description: `Extract text from one or more images using OCR (Tesseract with preprocessing pipeline). Use this when the model cannot see images directly — for example, when read() returns an error about missing vision support, or when the user asks about content in a screenshot or image file. Pass a single path for one image, or an array of paths to batch multiple images in one call — they OCR in parallel and one failure won't waste the batch. Supports png, jpg, webp, and other common image formats. Output truncated to ${DEFAULT_MAX_LINES} lines or ${formatSize(DEFAULT_MAX_BYTES)}.`,
+    description: `Extract text from one or more images using OCR (Tesseract with preprocessing pipeline). Use this when the model cannot see images directly — for example, when read() returns an error about missing vision support, or when the user asks about content in a screenshot or image file. Pass one or more image paths in an array (e.g. ["a.png"] or ["a.png", "b.png"]) — they OCR in parallel and one failure won't waste the batch. Supports png, jpg, webp, and other common image formats. Output truncated to ${DEFAULT_MAX_LINES} lines or ${formatSize(DEFAULT_MAX_BYTES)}.`,
 
     promptSnippet: "Extract text from images via OCR",
 
@@ -181,7 +181,7 @@ export default function (pi: ExtensionAPI) {
       "For code screenshots and terminal output, use the default PSM=6. For mixed-content images with UI elements, try PSM=3 or PSM=4. For a single line of text, use PSM=7.",
       "If read_image returns confidence below 50%, warn the user that OCR may be unreliable and ask them to verify the output. If confidence is below 30%, the image may not contain readable text.",
       "If read_image fails with a dependency error, tell the user to install tesseract-ocr and imagemagick and try again.",
-      "To OCR multiple images in one call, pass an array of paths (e.g. [\"a.png\", \"b.png\"]). Vision fallback only works for single-image calls — if a batch image has low confidence, call read_image again with just that path to use model vision.",
+      "paths is always an array. For a single image, pass [\"file.png\"]. For multiple images, pass [\"a.png\", \"b.png\"] — they OCR in parallel. Vision fallback only works for single-image calls — if a batch image has low confidence, call read_image again with just that path to use model vision.",
     ],
 
     parameters: ReadImageParams,
@@ -201,7 +201,7 @@ export default function (pi: ExtensionAPI) {
 
       const language = params.language || "eng";
       const psm = params.psm ?? 6;
-      const rawPaths = Array.isArray(params.path) ? params.path : [params.path];
+      const rawPaths = params.paths;
       const cwd = ctx.cwd;
 
       // --- Single-image fast path (backward compatible) ---
@@ -321,7 +321,7 @@ export default function (pi: ExtensionAPI) {
     },
 
     renderCall(args, theme, _context) {
-      const paths = Array.isArray(args.path) ? args.path : [args.path || "(image)"];
+      const paths = args.paths || ["(image)"];
       let text = theme.fg("toolTitle", theme.bold("read_image "));
       if (paths.length === 1) {
         text += theme.fg("dim", paths[0]);
