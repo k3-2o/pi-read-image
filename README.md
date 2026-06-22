@@ -1,5 +1,7 @@
 # pi-read-image
 
+[![npm](https://img.shields.io/npm/v/@k3_2o/pi-read-image)](https://www.npmjs.com/package/@k3_2o/pi-read-image)
+
 OCR image-to-text tool for [Pi](https://pi.dev) — extracts text from screenshots, terminal output, and code images using Tesseract + ImageMagick.
 
 ## What it does
@@ -23,6 +25,10 @@ brew install tesseract imagemagick
 ## Install
 
 ```bash
+# via npm (recommended)
+pi install npm:@k3_2o/pi-read-image
+
+# via GitHub
 pi install git:github.com/k3-2o/pi-read-image
 ```
 
