@@ -2,7 +2,7 @@
  * OCR pipeline: ImageMagick preprocessing + native C Tesseract
  *
  * Based on the production pipeline documented in OCR.md:
- * - Tier 1: ImageMagick preprocessing (resize 250%, sharpen, contrast, grayscale, alpha, border)
+ * - Tier 1: ImageMagick preprocessing (resize, contrast-stretch, alpha, border)
  * - Tier 2: Native C Tesseract with eng_best model (if available) or default eng
  * - Tier 3: PSM 6 (uniform block), OEM 1 (LSTM only) by default
  * - Tier 4: Dictionary disabled, non-dict word penalties, ASCII whitelist for code/terminal
@@ -301,9 +301,7 @@ export async function runOCR(
       await execFileAsync(convertCmd, [
         absPath,
         "-resize", upscaleFactor,
-        "-sharpen", "0x3",
         "-contrast-stretch", "5%",
-        "-colorspace", "Gray",
         "-alpha", "off",
         "-bordercolor", "White",
         "-border", "10x10",
@@ -339,24 +337,9 @@ export async function runOCR(
       tesseractArgs.push("-c", `tessedit_char_whitelist=${ASCII_WHITELIST}`);
     }
 
-    // Set TESSDATA_PREFIX for custom best model path
-    const env = { ...process.env };
-    let tessdataOverride = false;
-    if (model.path && model.label === "best") {
-      const parent = resolve(model.path, "..");
-      if (
-        parent !== "/usr/share/tesseract-ocr/4.00/tessdata" &&
-        parent !== "/usr/share/tesseract-ocr/5/tessdata" &&
-        parent !== "/usr/share/tessdata"
-      ) {
-        env.TESSDATA_PREFIX = parent;
-        tessdataOverride = true;
-      }
-    }
-
     await execFileAsync("tesseract", tesseractArgs, {
       timeout: 60000,
-      env,
+      env: process.env,
       maxBuffer: 50 * 1024 * 1024,
     });
 
@@ -406,7 +389,7 @@ export async function runOCR(
       confidence: avgConfidence,
       language,
       psm,
-      model: model.label + (tessdataOverride ? " (custom path)" : "") + (preprocessFailed ? " (no preprocessing)" : ""),
+      model: model.label + (preprocessFailed ? " (no preprocessing)" : ""),
     };
   } catch (err: any) {
     if (err.stderr) {
