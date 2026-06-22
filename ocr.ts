@@ -48,8 +48,7 @@ export interface DepsCheck {
 const ASCII_WHITELIST =
   "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz" +
   "0123456789" +
-  " .,;:!?()\"'`~-_[]{}@#$%^&*+=/\\\\|<>" +
-  "\t\n";
+  " .,;:!?()\"'`~-_[]{}@#$%^&*+=/\\\\|<>";
 
 // Upscale factor for terminal screenshots.
 // Tesseract was trained on 300 DPI scans; terminal screenshots are ~72 DPI.
