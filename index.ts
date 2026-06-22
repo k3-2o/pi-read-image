@@ -34,7 +34,10 @@ import { checkDependencies, runOCR, type OcrResult } from "./ocr";
 // --- Schema ---
 
 const ReadImageParams = Type.Object({
-  path: Type.String({ description: "Path to the image file (png, jpg, webp, etc.)" }),
+  path: Type.Union([Type.String(), Type.Array(Type.String())], {
+    description:
+      "Path to the image file, or array of multiple image paths to batch OCR (png, jpg, webp, etc.)",
+  }),
   language: Type.Optional(
     Type.String({
       description: "OCR language code. Default: 'eng'. Use 'eng' for English, or ISO 639-3 codes for others (e.g., 'fra' for French). Requires traineddata to be installed.",
@@ -61,6 +64,8 @@ interface ReadImageDetails {
   totalBytes: number;
   /** Which path handled the image: "ocr" (Tesseract ≥ 50%), "vision_fallback" (OCR < 50%, sent to model), "ocr_no_vision" (OCR < 50%, model lacks vision) */
   approach: "ocr" | "vision_fallback" | "ocr_no_vision";
+  /** When >1, this is a batch result. Details reflect the last image; confidence is averaged. */
+  imageCount?: number;
 }
 
 // --- Main Extension ---
@@ -70,6 +75,98 @@ export default function (pi: ExtensionAPI) {
   let depsChecked = false;
   let depsOk = false;
   let depsErrorMessage = "";
+
+  /** Resolve a path (with @ prefix convention) to an absolute path. */
+  function resolveImagePath(raw: string, cwd: string | undefined): string {
+    const cleaned = raw.replace(/^@/, "");
+    return cleaned.startsWith("/")
+      ? cleaned
+      : resolve(cwd || process.cwd(), cleaned);
+  }
+
+  /** OCR a single image and return its output text + details. */
+  async function ocrSingle(
+    absPath: string,
+    language: string,
+    psm: number,
+    cwd: string | undefined,
+  ): Promise<{ text: string; details: ReadImageDetails }> {
+    let fileSize = 0;
+    try {
+      const s = await stat(absPath);
+      fileSize = s.size;
+      if (fileSize > 50 * 1024 * 1024) {
+        throw new Error(`Image too large (${formatSize(fileSize)}). Maximum: 50MB.`);
+      }
+    } catch (err: any) {
+      if (err.code === "ENOENT") {
+        throw new Error(`Image file not found: ${absPath}`);
+      }
+      throw err;
+    }
+
+    let result: OcrResult;
+    try {
+      result = await runOCR(absPath, { language, psm, cwd });
+    } catch (err: any) {
+      throw new Error(`OCR failed: ${err.message}`);
+    }
+
+    if (
+      !shownModelSuggestion &&
+      (result.model === "default" || result.model === "fast")
+    ) {
+      shownModelSuggestion = true;
+    }
+
+    const header = [
+      `[OCR Result: ${absPath}]`,
+      `Confidence: ${result.confidence}%`,
+      `Language: ${result.language} (PSM ${result.psm})`,
+      `Engine: ${result.model} model`,
+    ];
+
+    if (result.model !== "best") {
+      header.push(
+        `Note: Install eng_best model for ~20% better accuracy: ` +
+          `wget https://github.com/tesseract-ocr/tessdata_best/raw/main/eng.traineddata -O ~/.local/share/tessdata/eng.traineddata`,
+      );
+    }
+
+    header.push("", "--- Extracted Text ---", "");
+
+    const headerText = header.join("\n");
+    const fullOutput = headerText + result.text;
+
+    const truncation = truncateHead(fullOutput, {
+      maxLines: DEFAULT_MAX_LINES,
+      maxBytes: DEFAULT_MAX_BYTES,
+    });
+
+    let outputText = truncation.content;
+    const details: ReadImageDetails = {
+      path: absPath,
+      confidence: result.confidence,
+      language: result.language,
+      psm: result.psm,
+      model: result.model,
+      truncated: truncation.truncated,
+      totalLines: truncation.totalLines,
+      totalBytes: truncation.totalBytes,
+      approach: result.confidence >= 50 ? "ocr" : "ocr_no_vision",
+    };
+
+    if (truncation.truncated) {
+      const truncatedLines = truncation.totalLines - truncation.outputLines;
+      const truncatedBytes = truncation.totalBytes - truncation.outputBytes;
+      outputText +=
+        `\n\n[Output truncated: showing ${truncation.outputLines} of ${truncation.totalLines} lines ` +
+        `(${formatSize(truncation.outputBytes)} of ${formatSize(truncation.totalBytes)}). ` +
+        `${truncatedLines} lines (${formatSize(truncatedBytes)}) omitted.]`;
+    }
+
+    return { text: outputText, details };
+  }
 
   pi.registerTool({
     name: "read_image",
@@ -99,134 +196,137 @@ export default function (pi: ExtensionAPI) {
           depsOk = true;
         }
       }
-
-      if (!depsOk) {
-        throw new Error(depsErrorMessage);
-      }
-
-      const rawPath = params.path.replace(/^@/, "");
-      const absPath = rawPath.startsWith("/")
-        ? rawPath
-        : resolve(ctx.cwd || process.cwd(), rawPath);
-
-      let fileSize = 0;
-      try {
-        const s = await stat(absPath);
-        fileSize = s.size;
-        if (fileSize > 50 * 1024 * 1024) {
-          throw new Error(`Image too large (${formatSize(fileSize)}). Maximum: 50MB.`);
-        }
-      } catch (err: any) {
-        if (err.code === "ENOENT") {
-          throw new Error(`Image file not found: ${absPath}`);
-        }
-        throw err;
-      }
+      if (!depsOk) throw new Error(depsErrorMessage);
 
       const language = params.language || "eng";
       const psm = params.psm ?? 6;
+      const rawPaths = Array.isArray(params.path) ? params.path : [params.path];
+      const cwd = ctx.cwd;
 
-      let result: OcrResult;
-      try {
-        result = await runOCR(absPath, { language, psm, cwd: ctx.cwd });
-      } catch (err: any) {
-        throw new Error(`OCR failed: ${err.message}`);
+      // --- Single-image fast path (backward compatible) ---
+      if (rawPaths.length === 1) {
+        const absPath = resolveImagePath(rawPaths[0], cwd);
+        let { text, details } = await ocrSingle(absPath, language, psm, cwd);
+
+        const modelSupportsVision = ctx?.model?.input?.includes?.("image");
+        if (details.confidence < 50 && modelSupportsVision) {
+          let buffer: Buffer;
+          try {
+            buffer = await readFile(absPath);
+          } catch (err: any) {
+            throw new Error(`Vision fallback failed: cannot read image file: ${err.message}`);
+          }
+          const base64 = buffer.toString("base64");
+          const mimeType = detectImageMimeType(absPath);
+          const fallbackNote = [
+            `[OCR fallback] Confidence too low (${details.confidence}%). Falling back to direct model vision.`,
+            `The image has been attached below for the model to read directly.`,
+          ].join("\n");
+
+          return {
+            content: [
+              { type: "text", text: fallbackNote },
+              { type: "image", data: base64, mimeType },
+            ],
+            details: { ...details, approach: "vision_fallback" as const },
+          };
+        }
+
+        if (details.confidence < 50) {
+          text += `\n\n⚠ Low confidence (${details.confidence}%). Results may be unreliable. Consider verifying the output manually or trying a different PSM mode.`;
+        }
+
+        return { content: [{ type: "text", text }], details };
       }
 
-      if (
-        !shownModelSuggestion &&
-        (result.model === "default" || result.model === "fast")
-      ) {
-        shownModelSuggestion = true;
+      // --- Batch path (multiple images, parallel + partial) ---
+      const absPaths = rawPaths.map((p) => resolveImagePath(p, cwd));
+
+      const results = await Promise.allSettled(
+        absPaths.map((p) => ocrSingle(p, language, psm, cwd)),
+      );
+
+      const outputs: string[] = [];
+      const errors: string[] = [];
+      let totalConfidence = 0;
+      let successCount = 0;
+      let lastDetails: ReadImageDetails | null = null;
+
+      for (let i = 0; i < results.length; i++) {
+        const r = results[i];
+        if (r.status === "fulfilled") {
+          outputs.push(r.value.text);
+          totalConfidence += r.value.details.confidence;
+          successCount++;
+          lastDetails = r.value.details;
+        } else {
+          const reason = r.reason?.message ?? String(r.reason ?? "unknown error");
+          errors.push(`[${absPaths[i]}] ${reason}`);
+        }
       }
 
-      const header = [
-        `[OCR Result: ${absPath}]`,
-        `Confidence: ${result.confidence}%`,
-        `Language: ${result.language} (PSM ${result.psm})`,
-        `Engine: ${result.model} model`,
+      const avgConfidence =
+        successCount > 0
+          ? Math.round((totalConfidence / successCount) * 10) / 10
+          : 0;
+
+      const batchHeaderParts = [
+        `[Batch OCR: ${rawPaths.length} images]`,
       ];
-
-      if (result.model !== "best") {
-        header.push(
-          `Note: Install eng_best model for ~20% better accuracy: ` +
-            `wget https://github.com/tesseract-ocr/tessdata_best/raw/main/eng.traineddata -O ~/.local/share/tessdata/eng.traineddata`,
+      if (successCount > 0) {
+        batchHeaderParts.push(
+          `Average Confidence: ${avgConfidence}% (${successCount}/${rawPaths.length} succeeded)`,
         );
       }
+      batchHeaderParts.push(`Language: ${language} (PSM ${psm})`);
+      if (errors.length > 0) {
+        batchHeaderParts.push("", "Failed:");
+        for (const e of errors) batchHeaderParts.push(`  ⚠ ${e}`);
+      }
+      batchHeaderParts.push("", "---", "");
 
-      header.push("", "--- Extracted Text ---", "");
+      const combinedText =
+        batchHeaderParts.join("\n") + outputs.join("\n\n---\n\n");
 
-      const headerText = header.join("\n");
-      const fullOutput = headerText + result.text;
-
-      const truncation = truncateHead(fullOutput, {
+      const truncation = truncateHead(combinedText, {
         maxLines: DEFAULT_MAX_LINES,
         maxBytes: DEFAULT_MAX_BYTES,
       });
 
-      let outputText = truncation.content;
-      const details: ReadImageDetails = {
-        path: absPath,
-        confidence: result.confidence,
-        language: result.language,
-        psm: result.psm,
-        model: result.model,
-        truncated: truncation.truncated,
-        totalLines: truncation.totalLines,
-        totalBytes: truncation.totalBytes,
-        approach: result.confidence >= 50 ? "ocr" : "ocr_no_vision", // may be overwritten below
-      };
+      let finalText = truncation.content;
 
       if (truncation.truncated) {
-        const truncatedLines = truncation.totalLines - truncation.outputLines;
-        const truncatedBytes = truncation.totalBytes - truncation.outputBytes;
-        outputText +=
-          `\n\n[Output truncated: showing ${truncation.outputLines} of ${truncation.totalLines} lines ` +
-          `(${formatSize(truncation.outputBytes)} of ${formatSize(truncation.totalBytes)}). ` +
-          `${truncatedLines} lines (${formatSize(truncatedBytes)}) omitted. ` +
-          `The image may contain more text than shown.]`;
-      }
-
-      // --- Vision fallback: if OCR confidence is too low and the model can see images, send the image directly ---
-      const modelSupportsVision = ctx?.model?.input?.includes?.("image");
-
-      if (result.confidence < 50 && modelSupportsVision) {
-        // OCR likely misread — let the model see the image itself.
-        const buffer = await readFile(absPath);
-        const base64 = buffer.toString("base64");
-        const mimeType = detectImageMimeType(absPath);
-        const fallbackNote = [
-          `[OCR fallback] Confidence too low (${result.confidence}%). Falling back to direct model vision.`,
-          `The image has been attached below for the model to read directly.`,
-        ].join("\n");
-
-        return {
-          content: [
-            { type: "text", text: fallbackNote },
-            { type: "image", data: base64, mimeType },
-          ],
-          details: {
-            ...details,
-            approach: "vision_fallback" as const,
-          },
-        };
-      }
-
-      if (result.confidence < 50) {
-        outputText +=
-          `\n\n⚠ Low confidence (${result.confidence}%). Results may be unreliable. ` +
-          `Consider verifying the output manually or trying a different PSM mode.`;
+        finalText += `\n\n[Output truncated: showing ${truncation.outputLines} of ${truncation.totalLines} lines (${formatSize(truncation.outputBytes)} of ${formatSize(truncation.totalBytes)}).]`;
       }
 
       return {
-        content: [{ type: "text", text: outputText }],
-        details,
+        content: [{ type: "text", text: finalText }],
+        details: {
+          ...(lastDetails ?? {
+            path: "",
+            confidence: avgConfidence,
+            language,
+            psm,
+            model: "",
+            truncated: truncation.truncated,
+            totalLines: truncation.totalLines,
+            totalBytes: truncation.totalBytes,
+            approach: "ocr" as const,
+          }),
+          confidence: avgConfidence,
+          imageCount: rawPaths.length,
+        },
       };
     },
 
     renderCall(args, theme, _context) {
+      const paths = Array.isArray(args.path) ? args.path : [args.path || "(image)"];
       let text = theme.fg("toolTitle", theme.bold("read_image "));
-      text += theme.fg("dim", args.path || "(image)");
+      if (paths.length === 1) {
+        text += theme.fg("dim", paths[0]);
+      } else {
+        text += theme.fg("dim", `${paths.length} images`);
+      }
       if (args.language && args.language !== "eng") {
         text += theme.fg("muted", ` lang:${args.language}`);
       }
@@ -246,6 +346,32 @@ export default function (pi: ExtensionAPI) {
         return new Text(theme.fg("error", "OCR failed"), 0, 0);
       }
 
+      const isBatch = (details.imageCount ?? 1) > 1;
+
+      if (isBatch) {
+        let display = theme.fg("toolTitle", theme.bold("Batch OCR"));
+        display += theme.fg("dim", ` · ${details.imageCount} images`);
+        const confColor =
+          details.confidence >= 80
+            ? "success"
+            : details.confidence >= 50
+              ? "warning"
+              : "error";
+        display += ` ${theme.fg(confColor, `${details.confidence}% avg`)}`;
+        display += theme.fg("dim", ` · ${details.language} · psm ${details.psm}`);
+        if (details.truncated) display += theme.fg("warning", " · TRUNCATED");
+
+        if (expanded) {
+          const content = result.content[0];
+          if (content?.type === "text") {
+            for (const line of content.text.split("\n").slice(0, 10)) {
+              display += `\n${theme.fg("dim", line)}`;
+            }
+          }
+        }
+        return new Text(display, 0, 0);
+      }
+
       const confColor =
         details.confidence >= 80
           ? "success"
@@ -255,7 +381,6 @@ export default function (pi: ExtensionAPI) {
 
       let display = theme.fg(confColor, `${details.confidence}% confidence`);
 
-      // Show which path handled the image
       if (details.approach === "vision_fallback") {
         display += theme.fg("info", " → model vision");
       } else if (details.approach === "ocr_no_vision") {

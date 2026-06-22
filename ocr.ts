@@ -110,19 +110,29 @@ export async function checkDependencies(): Promise<DepsCheck> {
 
 // --- Model Detection ---
 
+let modelCache: { path?: string; label: string } | null = null;
+
 async function findBestModel(): Promise<{ path?: string; label: string }> {
+  if (modelCache) return modelCache;
+
+  const checkPath = async (p: string): Promise<{ path?: string; label: string } | null> => {
+    try {
+      const s = await stat(p);
+      if (s.size > 10_000_000) return { path: p, label: "best" };
+      return { path: p, label: "fast" };
+    } catch {
+      return null;
+    }
+  };
+
   // Check TESSDATA_PREFIX env var
   const tessdataPrefix = process.env.TESSDATA_PREFIX;
   if (tessdataPrefix) {
     const bestPath = join(tessdataPrefix, "eng.traineddata");
-    try {
-      await stat(bestPath);
-      const s = await stat(bestPath);
-      if (s.size > 10_000_000) {
-        return { path: bestPath, label: "best" };
-      }
-    } catch {
-      // not found
+    const result = await checkPath(bestPath);
+    if (result) {
+      modelCache = result;
+      return modelCache;
     }
   }
 
@@ -131,13 +141,10 @@ async function findBestModel(): Promise<{ path?: string; label: string }> {
     process.env.HOME || "~",
     ".local/share/tessdata/eng.traineddata",
   );
-  try {
-    const s = await stat(localPath);
-    if (s.size > 10_000_000) {
-      return { path: localPath, label: "best" };
-    }
-  } catch {
-    // not found
+  const localResult = await checkPath(localPath);
+  if (localResult) {
+    modelCache = localResult;
+    return modelCache;
   }
 
   // Check system tessdata paths
@@ -147,28 +154,30 @@ async function findBestModel(): Promise<{ path?: string; label: string }> {
     "/usr/share/tessdata/eng.traineddata",
   ];
   for (const p of systemPaths) {
-    try {
-      const s = await stat(p);
-      if (s.size > 10_000_000) {
-        return { path: p, label: "best" };
-      }
-      return { path: p, label: "fast" };
-    } catch {
-      // not found
+    const result = await checkPath(p);
+    if (result) {
+      modelCache = result;
+      return modelCache;
     }
   }
 
-  return { label: "default" };
+  modelCache = { label: "default" };
+  return modelCache;
 }
 
 // --- Convert Detection ---
 
+let convertCache: string | null = null;
+
 async function getConvertCommand(): Promise<string> {
+  if (convertCache) return convertCache;
   try {
     await execFileAsync("convert", ["--version"], { timeout: 3000 });
-    return "convert";
+    convertCache = "convert";
+    return convertCache;
   } catch {
-    return "magick";
+    convertCache = "magick";
+    return convertCache;
   }
 }
 
@@ -183,8 +192,8 @@ function postProcess(text: string): string {
   text = text.replace(/([a-z])\|/g, "$1");
 
   // Fix permission-bit mangling in ls -la output
-  text = text.replace(/^J(r[wxsS-]{7})/gm, "-$1");
-  text = text.replace(/^d(r[a@])(x[wxsS-]{6})/gm, "drwx$2");
+  text = text.replace(/^J(r[wxsS-]{8})/gm, "-$1");
+  text = text.replace(/^d(r[a@])(x[wxsS-]{7})/gm, "drwx$2");
 
   // Fix $ prompt being read as ) or 5
   text = text.replace(
@@ -410,25 +419,3 @@ export async function runOCR(
   }
 }
 
-// --- Install Instructions ---
-
-export function getInstallInstructions(): string {
-  return [
-    "This tool requires native C Tesseract and ImageMagick.",
-    "",
-    "Install dependencies:",
-    "  sudo apt install tesseract-ocr imagemagick -y",
-    "",
-    "For ~20% better accuracy, install the eng_best model:",
-    "  wget https://github.com/tesseract-ocr/tessdata_best/raw/main/eng.traineddata",
-    "  mkdir -p ~/.local/share/tessdata",
-    "  mv eng.traineddata ~/.local/share/tessdata/",
-    "  echo 'export TESSDATA_PREFIX=~/.local/share/tessdata' >> ~/.bashrc",
-    "  source ~/.bashrc",
-    "",
-    "On macOS:",
-    "  brew install tesseract imagemagick",
-    "",
-    `Current TESSDATA_PREFIX: ${process.env.TESSDATA_PREFIX || "(not set)"}`,
-  ].join("\n");
-}
