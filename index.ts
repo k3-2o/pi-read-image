@@ -171,7 +171,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "read_image",
     label: "Read Image (OCR)",
-    description: `Extract text from an image using OCR (Tesseract with preprocessing pipeline). Use this when the model cannot see images directly — for example, when read() returns an error about missing vision support, or when the user asks about content in a screenshot or image file. Supports png, jpg, webp, and other common image formats. Output truncated to ${DEFAULT_MAX_LINES} lines or ${formatSize(DEFAULT_MAX_BYTES)}.`,
+    description: `Extract text from one or more images using OCR (Tesseract with preprocessing pipeline). Use this when the model cannot see images directly — for example, when read() returns an error about missing vision support, or when the user asks about content in a screenshot or image file. Pass a single path for one image, or an array of paths to batch multiple images in one call — they OCR in parallel and one failure won't waste the batch. Supports png, jpg, webp, and other common image formats. Output truncated to ${DEFAULT_MAX_LINES} lines or ${formatSize(DEFAULT_MAX_BYTES)}.`,
 
     promptSnippet: "Extract text from images via OCR",
 
@@ -181,6 +181,7 @@ export default function (pi: ExtensionAPI) {
       "For code screenshots and terminal output, use the default PSM=6. For mixed-content images with UI elements, try PSM=3 or PSM=4. For a single line of text, use PSM=7.",
       "If read_image returns confidence below 50%, warn the user that OCR may be unreliable and ask them to verify the output. If confidence is below 30%, the image may not contain readable text.",
       "If read_image fails with a dependency error, tell the user to install tesseract-ocr and imagemagick and try again.",
+      "To OCR multiple images in one call, pass an array of paths (e.g. [\"a.png\", \"b.png\"]). Vision fallback only works for single-image calls — if a batch image has low confidence, call read_image again with just that path to use model vision.",
     ],
 
     parameters: ReadImageParams,

@@ -1,12 +1,23 @@
 {
   "name": "@k3_2o/pi-read-image",
-  "version": "0.1.0",
-  "description": "OCR image-to-text tool for Pi — extracts text from screenshots, terminal output, and code images using Tesseract + ImageMagick",
-  "keywords": ["pi-package", "ocr", "tesseract", "image-to-text", "screenshots"],
+  "version": "0.1.1",
+  "description": "OCR image-to-text tool for Pi \u2014 extracts text from screenshots, terminal output, and code images using Tesseract + ImageMagick",
+  "keywords": [
+    "pi-package",
+    "ocr",
+    "tesseract",
+    "image-to-text",
+    "screenshots"
+  ],
   "author": "k3_2o",
   "license": "MIT",
   "type": "module",
-  "files": ["index.ts", "ocr.ts", "README.md", "LICENSE"],
+  "files": [
+    "index.ts",
+    "ocr.ts",
+    "README.md",
+    "LICENSE"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/k3-2o/pi-read-image.git"
@@ -15,7 +26,9 @@
     "access": "public"
   },
   "pi": {
-    "extensions": ["./index.ts"]
+    "extensions": [
+      "./index.ts"
+    ]
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
