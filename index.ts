@@ -89,8 +89,13 @@ export default function (pi: ExtensionAPI) {
     absPath: string,
     language: string,
     psm: number,
+    signal: AbortSignal | undefined,
     cwd: string | undefined,
   ): Promise<{ text: string; details: ReadImageDetails }> {
+    if (signal?.aborted) {
+      throw new Error("read_image: aborted");
+    }
+
     let fileSize = 0;
     try {
       const s = await stat(absPath);
@@ -107,8 +112,9 @@ export default function (pi: ExtensionAPI) {
 
     let result: OcrResult;
     try {
-      result = await runOCR(absPath, { language, psm, cwd });
+      result = await runOCR(absPath, { language, psm, cwd, signal });
     } catch (err: any) {
+      if (signal?.aborted) throw new Error("read_image: aborted");
       throw new Error(`OCR failed: ${err.message}`);
     }
 
@@ -186,7 +192,11 @@ export default function (pi: ExtensionAPI) {
 
     parameters: ReadImageParams,
 
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      if (signal?.aborted) {
+        throw new Error("read_image: aborted");
+      }
+
       if (!depsChecked) {
         const deps = await checkDependencies();
         depsChecked = true;
@@ -207,7 +217,8 @@ export default function (pi: ExtensionAPI) {
       // --- Single-image fast path (backward compatible) ---
       if (rawPaths.length === 1) {
         const absPath = resolveImagePath(rawPaths[0], cwd);
-        let { text, details } = await ocrSingle(absPath, language, psm, cwd);
+        if (signal?.aborted) throw new Error("read_image: aborted");
+        let { text, details } = await ocrSingle(absPath, language, psm, signal, cwd);
 
         const modelSupportsVision = ctx?.model?.input?.includes?.("image");
         if (details.confidence < 50 && modelSupportsVision) {
@@ -243,9 +254,17 @@ export default function (pi: ExtensionAPI) {
       // --- Batch path (multiple images, parallel + partial) ---
       const absPaths = rawPaths.map((p) => resolveImagePath(p, cwd));
 
+      if (signal?.aborted) {
+        throw new Error("read_image: aborted");
+      }
+
       const results = await Promise.allSettled(
-        absPaths.map((p) => ocrSingle(p, language, psm, cwd)),
+        absPaths.map((p) => ocrSingle(p, language, psm, signal, cwd)),
       );
+
+      if (signal?.aborted) {
+        throw new Error("read_image: aborted");
+      }
 
       const outputs: string[] = [];
       const errors: string[] = [];
@@ -337,7 +356,14 @@ export default function (pi: ExtensionAPI) {
       return new Text(text, 0, 0);
     },
 
-    renderResult(result, { expanded, isPartial }, theme, _context) {
+    renderResult(result, { expanded, isPartial }, theme, context) {
+      if (context?.isError) {
+        const errorText = result.content?.[0]?.type === "text"
+          ? result.content[0].text
+          : "read_image: aborted";
+        return new Text(theme.fg("error", `✗ ${errorText}`), 0, 0);
+      }
+
       if (isPartial) {
         return new Text(theme.fg("warning", "Running OCR..."), 0, 0);
       }

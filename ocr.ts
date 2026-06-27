@@ -31,6 +31,8 @@ export interface OcrOptions {
   language?: string;
   psm?: number;
   cwd?: string;
+  /** AbortSignal to cancel the OCR mid-flight. Threaded to child processes. */
+  signal?: AbortSignal;
 }
 
 export interface DepsCheck {
@@ -243,11 +245,16 @@ export async function runOCR(
   const language = options.language || "eng";
   const psm = options.psm ?? 6;
   const cwd = options.cwd || process.cwd();
+  const signal = options.signal;
 
   // Resolve absolute path
   const absPath = imagePath.startsWith("/")
     ? imagePath
     : resolve(cwd, imagePath);
+
+  if (signal?.aborted) {
+    throw new Error("aborted");
+  }
 
   // Check file exists
   try {
@@ -297,6 +304,10 @@ export async function runOCR(
       // use default
     }
 
+    if (signal?.aborted) {
+      throw new Error("aborted");
+    }
+
     try {
       await execFileAsync(convertCmd, [
         absPath,
@@ -306,8 +317,11 @@ export async function runOCR(
         "-bordercolor", "White",
         "-border", "10x10",
         preprocessed,
-      ], { timeout: 60000 });
+      ], { timeout: 60000, signal });
     } catch (preprocessErr: any) {
+      if (signal?.aborted) {
+        throw new Error("aborted");
+      }
       // ImageMagick failed (timeout, OOM, or unsupported image type).
       // Fall back to OCR on the raw image without preprocessing.
       preprocessFailed = true;
@@ -339,6 +353,7 @@ export async function runOCR(
 
     await execFileAsync("tesseract", tesseractArgs, {
       timeout: 60000,
+      signal,
       env: process.env,
       maxBuffer: 50 * 1024 * 1024,
     });
@@ -392,6 +407,9 @@ export async function runOCR(
       model: model.label + (preprocessFailed ? " (no preprocessing)" : ""),
     };
   } catch (err: any) {
+    if (signal?.aborted) {
+      throw new Error("aborted");
+    }
     if (err.stderr) {
       throw new Error(`Tesseract OCR failed:\n${err.stderr}`);
     }
