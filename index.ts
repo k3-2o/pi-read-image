@@ -251,16 +251,8 @@ export default function (pi: ExtensionAPI) {
         return { content: [{ type: "text", text }], details };
       }
 
-      // --- Batch path (multiple images, parallel + partial) ---
+      // --- Batch path (multiple images, sequential to avoid Tesseract model contention) ---
       const absPaths = rawPaths.map((p) => resolveImagePath(p, cwd));
-
-      if (signal?.aborted) {
-        throw new Error("read_image: aborted");
-      }
-
-      const results = await Promise.allSettled(
-        absPaths.map((p) => ocrSingle(p, language, psm, signal, cwd)),
-      );
 
       if (signal?.aborted) {
         throw new Error("read_image: aborted");
@@ -272,16 +264,20 @@ export default function (pi: ExtensionAPI) {
       let successCount = 0;
       let lastDetails: ReadImageDetails | null = null;
 
-      for (let i = 0; i < results.length; i++) {
-        const r = results[i];
-        if (r.status === "fulfilled") {
-          outputs.push(r.value.text);
-          totalConfidence += r.value.details.confidence;
+      for (const p of absPaths) {
+        if (signal?.aborted) {
+          throw new Error("read_image: aborted");
+        }
+        try {
+          const { text, details } = await ocrSingle(p, language, psm, signal, cwd);
+          outputs.push(text);
+          totalConfidence += details.confidence;
           successCount++;
-          lastDetails = r.value.details;
-        } else {
-          const reason = r.reason?.message ?? String(r.reason ?? "unknown error");
-          errors.push(`[${absPaths[i]}] ${reason}`);
+          lastDetails = details;
+        } catch (err: any) {
+          if (signal?.aborted) throw new Error("read_image: aborted");
+          const reason = err?.message ?? String(err ?? "unknown error");
+          errors.push(`[${p}] ${reason}`);
         }
       }
 
