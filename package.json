@@ -1,7 +1,7 @@
 {
   "name": "@k3_2o/pi-read-image",
-  "version": "0.2.1",
-  "description": "OCR image-to-text tool for Pi \u2014 extracts text from screenshots, terminal output, and code images using Tesseract + ImageMagick",
+  "version": "0.2.2",
+  "description": "OCR image-to-text tool for Pi — extracts text from screenshots, terminal output, and code images using Tesseract + ImageMagick",
   "keywords": [
     "pi-package",
     "ocr",
@@ -32,7 +32,7 @@
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": "^0.79.10",
+    "@earendil-works/pi-coding-agent": "^0.80.2",
     "@earendil-works/pi-tui": "*",
     "typebox": "*"
   },
