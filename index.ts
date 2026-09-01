@@ -71,6 +71,12 @@ interface ReadImageDetails {
 // --- Main Extension ---
 
 export default function (pi: ExtensionAPI) {
+  pi.registerTool(createReadImageTool());
+}
+
+/** Bridge-eligible factory (Exportable => declarable): manifests declare this
+ *  export; the extension path above is a thin wrapper over the same object. */
+export function createReadImageTool(defaultCwd?: string) {
   let shownModelSuggestion = false;
   let depsChecked = false;
   let depsOk = false;
@@ -174,7 +180,7 @@ export default function (pi: ExtensionAPI) {
     return { text: outputText, details };
   }
 
-  pi.registerTool({
+  return {
     name: "read_image",
     label: "Read Image (OCR)",
     description: `Extract text from one or more images using OCR (Tesseract with preprocessing pipeline). Use this when the model cannot see images directly — for example, when read() returns an error about missing vision support, or when the user asks about content in a screenshot or image file. Pass one or more image paths in an array (e.g. ["a.png"] or ["a.png", "b.png"]) — they OCR in parallel and one failure won't waste the batch. Supports png, jpg, webp, and other common image formats. Output truncated to ${DEFAULT_MAX_LINES} lines or ${formatSize(DEFAULT_MAX_BYTES)}.`,
@@ -212,7 +218,7 @@ export default function (pi: ExtensionAPI) {
       const language = params.language || "eng";
       const psm = params.psm ?? 6;
       const rawPaths = params.paths;
-      const cwd = ctx.cwd;
+      const cwd = ctx.cwd || defaultCwd;
 
       // --- Single-image fast path (backward compatible) ---
       if (rawPaths.length === 1) {
@@ -430,7 +436,7 @@ export default function (pi: ExtensionAPI) {
 
       return new Text(display, 0, 0);
     },
-  });
+  };
 }
 
 // --- Helpers ---
